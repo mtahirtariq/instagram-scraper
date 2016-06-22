@@ -22,25 +22,52 @@ class InstagramScraper:
         self.numPosts = 0
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
         self.future_to_item = {}
+        self.save_dir = './' + self.username
+        self.resume_file = os.path.join(self.save_dir, '.resume')
 
-    def crawl(self, max_id=None):
+    def get_min_id(self):
+        if os.path.exists(self.resume_file):
+            with open(self.resume_file, 'r') as f:
+                return json.load(f).get('min_id')
+        return None
+
+    def set_min_id(self, value):
+        with open(self.resume_file, 'w') as f:
+            json.dump({
+                'min_id': value,
+            }, f)
+
+    def crawl(self, max_id=None, min_id=None):
         """Walks through the user's media"""
         url = 'http://instagram.com/' + self.username + '/media' + ('?&max_id=' + max_id if max_id is not None else '')
         resp = requests.get(url)
         media = json.loads(resp.text)
 
-        self.numPosts += len(media['items'])
+        if min_id is None:
+            min_id = self.get_min_id()
 
+        new_min_id = None
+        is_continue = False
         for item in media['items']:
-            future = self.executor.submit(self.download, item, './' + self.username)
+            if self.numPosts == 0:
+                new_min_id = item['id']
+            if item['id'] == min_id:
+                break
+            self.numPosts += 1
+            future = self.executor.submit(self.download, item, self.save_dir)
             self.future_to_item[future] = item
+        else:
+            is_continue = True
 
-        sys.stdout.write('\rFound %i post(s)' % self.numPosts)
+        sys.stdout.write('\rFound %i new post(s)' % self.numPosts)
         sys.stdout.flush()
 
-        if 'more_available' in media and media['more_available'] is True:
+        if is_continue and 'more_available' in media and media['more_available'] is True:
             max_id = media['items'][-1]['id']
-            self.crawl(max_id)
+            self.crawl(max_id, min_id)
+
+        if new_min_id is not None:
+            self.set_min_id(new_min_id)
 
     def download(self, item, save_dir='./'):
         """Downloads the media file"""
